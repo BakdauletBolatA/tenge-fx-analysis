@@ -124,8 +124,11 @@ def run_long() -> dict:
         features.to_trading_date(features.to_usd_base(wide, currencies=codes)), brent
     )
     rets = features.log_returns(prices)
-    labels = features.regime(rets.index)
     float_date = pd.Timestamp(config.FLOAT_DATE)
+    by_regime = {
+        name: features.log_returns(chunk)
+        for name, chunk in features.split_by_regime(prices).items()
+    }
 
     print("[3/4] расчёты")
     peers = ["RUB", "BRENT", "CNY", "EUR", "NOK", "TRY", "UZS", "KGS"]
@@ -137,10 +140,10 @@ def run_long() -> dict:
     )
     robust_oil = A.robustness_profile(prices[prices.index >= float_date], "KZT", "BRENT")
     robust_rub = A.robustness_profile(prices[prices.index >= float_date], "KZT", "RUB")
-    regimes = A.regime_table(rets, labels, "KZT", ["RUB", "BRENT", "CNY", "EUR"])
+    regimes = A.regime_table(by_regime, "KZT", ["RUB", "BRENT", "CNY", "EUR"])
     brent_lag = A.lead_lag_profile(rets[rets.index >= float_date], "KZT", "BRENT", max_lag=4)
     jumps = A.jump_contribution(rets["KZT"])
-    vol_pre = A.excluding_jumps_volatility(rets.loc[rets.index < float_date, "KZT"], n=3)
+    vol_pre = A.excluding_jumps_volatility(by_regime["управляемый курс"]["KZT"], n=3)
 
     # Регрессии: дневные и месячные, только эпоха плавания.
     post = prices[prices.index >= float_date]

@@ -125,6 +125,22 @@ def regime(index: pd.DatetimeIndex, float_date=None) -> pd.Series:
     return labels
 
 
+def split_by_regime(prices: pd.DataFrame, float_date=None) -> dict[str, pd.DataFrame]:
+    """Разрезать панель цен на две эпохи курсовой политики.
+
+    Резать надо именно цены, а не доходности: если поделить уже посчитанные
+    доходности, то в эпоху плавания попадёт доходность самого дня перехода —
+    те самые +30% 20 августа 2015 года. А это не поведение нового режима,
+    а последнее действие старого. Разрезав цены, мы теряем первую доходность
+    каждого куска, и день перехода честно не достаётся никому.
+    """
+    float_date = pd.Timestamp(float_date or config.FLOAT_DATE)
+    return {
+        "управляемый курс": prices[prices.index < float_date],
+        "плавающий курс": prices[prices.index >= float_date],
+    }
+
+
 def resample_prices(prices: pd.DataFrame, freq: str) -> pd.DataFrame:
     """Последнее значение в периоде — так считается доходность за неделю/месяц."""
     if freq == "D":

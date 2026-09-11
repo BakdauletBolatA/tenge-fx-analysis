@@ -207,6 +207,22 @@ def weekday_profile(rets: pd.Series) -> pd.DataFrame:
 HORIZONS = [("D", "дневные"), ("W", "недельные"), ("ME", "месячные"), ("QE", "квартальные")]
 
 
+def _returns_at(prices: pd.DataFrame, freq: str) -> pd.DataFrame:
+    """Доходности на заданном горизонте.
+
+    На дневном горизонте обязательно через features.log_returns: он зануляет
+    доходность через длинные праздники и дыры в архиве. Иначе один Наурыз
+    подмешивает в дневную выборку недельное движение, и дневная корреляция
+    оказывается завышенной. На недельном и выше ресемплинг такие разрывы
+    поглощает сам.
+    """
+    from src import features
+
+    if freq == "D":
+        return features.log_returns(prices).dropna()
+    return np.log(features.resample_prices(prices, freq)).diff().dropna()
+
+
 def rank_corr(a: pd.Series, b: pd.Series) -> float:
     """Ранговая корреляция Спирмена, посчитанная руками.
 
@@ -233,13 +249,10 @@ def horizon_profile(
     баланс и бюджет — это медленный канал, и в дневных доходностях его
     почти не видно.
     """
-    from src import features
-
     horizons = horizons or HORIZONS
     rows = {}
     for freq, label in horizons:
-        resampled = features.resample_prices(prices[[target] + others], freq)
-        rets = np.log(resampled).diff().dropna()
+        rets = _returns_at(prices[[target] + others], freq)
         if method == "spearman":
             row = {code: rank_corr(rets[target], rets[code]) for code in others}
         else:
@@ -263,13 +276,10 @@ def robustness_profile(
     или после удаления пары аномальных периодов — значит, это не устойчивая
     связь, а несколько совместных катастроф.
     """
-    from src import features
-
     horizons = horizons or HORIZONS
     rows = {}
     for freq, label in horizons:
-        resampled = features.resample_prices(prices[[target, other]], freq)
-        rets = np.log(resampled).diff().dropna()
+        rets = _returns_at(prices[[target, other]], freq)
         calm = rets[rets[other].abs() < extreme]
         without_year = rets[rets.index.year != drop_year]
         rows[label] = {
@@ -282,17 +292,21 @@ def robustness_profile(
     return pd.DataFrame(rows).T
 
 
-def regime_table(rets: pd.DataFrame, labels: pd.Series, target: str, others: list[str]) -> pd.DataFrame:
-    """Корреляции и волатильность отдельно по эпохам курсовой политики."""
+def regime_table(frames: dict[str, pd.DataFrame], target: str, others: list[str]) -> pd.DataFrame:
+    """Корреляции и волатильность по эпохам курсовой политики.
+
+    На вход идут уже нарезанные куски (features.split_by_regime), а не общий
+    ряд с метками: иначе доходность дня перехода попадает в новый режим
+    и портит обе цифры сразу.
+    """
     rows = {}
-    for name, idx in labels.groupby(labels).groups.items():
-        chunk = rets.loc[rets.index.intersection(idx)]
-        data = chunk[[target] + others].dropna()
+    for name, rets in frames.items():
+        data = rets[[target] + others].dropna()
+        series = rets[target].dropna()
         row = {f"corr {code}": data[target].corr(data[code]) for code in others}
-        series = chunk[target].dropna()
         row["волатильность_год_%"] = series.std() * np.sqrt(TRADING_DAYS) * 100
         row["дней_без_движения_%"] = 100 * float((series.abs() < 1e-9).mean())
-        row["наблюдений"] = len(series)
+        row["наблюдений"] = len(data)
         rows[name] = row
     return pd.DataFrame(rows).T
 
