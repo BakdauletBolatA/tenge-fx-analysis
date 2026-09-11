@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+*.egg-info/
+
+# кэш загрузчика: сырые XML-ответы Нацбанка, их незачем хранить в репо
+data/cache/
+
+# OS
+.DS_Store
