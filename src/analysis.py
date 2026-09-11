@@ -207,11 +207,24 @@ def weekday_profile(rets: pd.Series) -> pd.DataFrame:
 HORIZONS = [("D", "дневные"), ("W", "недельные"), ("ME", "месячные"), ("QE", "квартальные")]
 
 
+def rank_corr(a: pd.Series, b: pd.Series) -> float:
+    """Ранговая корреляция Спирмена, посчитанная руками.
+
+    Тащить scipy ради одной функции не хочется, а корреляция Спирмена —
+    это обычный Пирсон на рангах. Нужна она здесь не для красоты: Пирсон
+    на месячных доходностях очень легко утаскивается парой катастрофических
+    месяцев, а ранги на величину движения не смотрят.
+    """
+    pair = pd.concat([a, b], axis=1).dropna()
+    return float(pair.iloc[:, 0].rank().corr(pair.iloc[:, 1].rank()))
+
+
 def horizon_profile(
     prices: pd.DataFrame,
     target: str,
     others: list[str],
     horizons: list[tuple[str, str]] | None = None,
+    method: str = "pearson",
 ) -> pd.DataFrame:
     """Корреляция target с каждой из others на разных горизонтах.
 
@@ -227,9 +240,45 @@ def horizon_profile(
     for freq, label in horizons:
         resampled = features.resample_prices(prices[[target] + others], freq)
         rets = np.log(resampled).diff().dropna()
-        row = {code: rets[target].corr(rets[code]) for code in others}
+        if method == "spearman":
+            row = {code: rank_corr(rets[target], rets[code]) for code in others}
+        else:
+            row = {code: rets[target].corr(rets[code]) for code in others}
         row["наблюдений"] = len(rets)
         rows[label] = row
+    return pd.DataFrame(rows).T
+
+
+def robustness_profile(
+    prices: pd.DataFrame,
+    target: str,
+    other: str,
+    horizons: list[tuple[str, str]] | None = None,
+    extreme: float = 0.4,
+    drop_year: int = 2020,
+) -> pd.DataFrame:
+    """Одна и та же связь, посчитанная четырьмя способами.
+
+    Если корреляция держится только на Пирсоне и разваливается на рангах
+    или после удаления пары аномальных периодов — значит, это не устойчивая
+    связь, а несколько совместных катастроф.
+    """
+    from src import features
+
+    horizons = horizons or HORIZONS
+    rows = {}
+    for freq, label in horizons:
+        resampled = features.resample_prices(prices[[target, other]], freq)
+        rets = np.log(resampled).diff().dropna()
+        calm = rets[rets[other].abs() < extreme]
+        without_year = rets[rets.index.year != drop_year]
+        rows[label] = {
+            "Пирсон": rets[target].corr(rets[other]),
+            "Спирмен": rank_corr(rets[target], rets[other]),
+            f"без движений >{extreme:.0%}": calm[target].corr(calm[other]),
+            f"без {drop_year} года": without_year[target].corr(without_year[other]),
+            "наблюдений": len(rets),
+        }
     return pd.DataFrame(rows).T
 
 
