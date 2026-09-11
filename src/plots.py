@@ -6,6 +6,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import matplotlib.ticker
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -290,4 +292,199 @@ def fig_intramonth(rets_trade: pd.DataFrame, name="09_intramonth.png"):
     ax.set_xticks(range(1, 32))
     ax.tick_params(axis="x", labelsize=7)
     ax.legend(loc="upper left", fontsize=9)
+    return _save(fig, name)
+
+
+# --------------------------------------------------------------------------
+# Длинный ряд: режимы курсовой политики и нефть
+# --------------------------------------------------------------------------
+
+def fig_long_history(prices: pd.DataFrame, name="10_long_history.png"):
+    """Двадцать лет курса: две эпохи и три ступеньки."""
+    _setup()
+    fig, ax = plt.subplots(figsize=(11, 5.4))
+
+    series = prices["KZT"]
+    float_date = pd.Timestamp(config.FLOAT_DATE)
+
+    ax.axvspan(series.index[0], float_date, color=config.COLOR_MUTED, alpha=0.12, zorder=0)
+    ax.plot(series.index, series, color=config.COLOR_KZT, lw=1.5)
+    ax.set_yscale("log")
+    ax.set_yticks([100, 150, 200, 300, 400, 500])
+    ax.get_yaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+    ax.set_ylabel("тенге за доллар (лог. шкала)")
+    ax.set_title("Тенге за двадцать лет: курс переставляли, а не торговали")
+
+    lo, hi = ax.get_ylim()
+    for step, (day, label) in enumerate(config.DEVALUATIONS.items()):
+        stamp = pd.Timestamp(day)
+        if stamp not in series.index:
+            nearest = series.index[series.index.searchsorted(stamp)]
+        else:
+            nearest = stamp
+        ax.scatter([nearest], [series.loc[nearest]], color=config.COLOR_RUB, s=40, zorder=5)
+        ax.annotate(
+            label,
+            xy=(mdates.date2num(nearest), series.loc[nearest]),
+            xytext=(-10, 26 + 14 * (step % 2)),
+            textcoords="offset points",
+            fontsize=8,
+            color="#3c4043",
+            ha="right",
+            arrowprops={"arrowstyle": "-", "lw": 0.7, "color": config.COLOR_MUTED},
+        )
+
+    ax.annotate("управляемый курс", xy=(0.11, 0.93), xycoords="axes fraction",
+                fontsize=9, color="#5f6368", ha="center")
+    ax.annotate("свободное плавание", xy=(0.74, 0.93), xycoords="axes fraction",
+                fontsize=9, color="#5f6368", ha="center")
+    return _save(fig, name)
+
+
+def fig_horizon(profile: pd.DataFrame, name="11_horizon_profile.png"):
+    """Рубль виден на днях, нефть — на кварталах."""
+    _setup()
+    fig, ax = plt.subplots(figsize=(9.0, 5.0))
+
+    x = range(len(profile))
+    ax.plot(x, profile["RUB"], marker="o", lw=2.0, color=config.COLOR_RUB, label="рубль")
+    ax.plot(x, profile["BRENT"], marker="o", lw=2.0, color=config.COLOR_ACCENT, label="нефть Brent")
+    ax.axhline(0, color="black", lw=0.9)
+    ax.set_xticks(list(x), profile.index)
+    ax.set_ylabel("корреляция с тенге")
+    ax.set_xlabel("на каком горизонте считаем доходность")
+    ax.set_title("Спор «рубль или нефть» решается выбором горизонта")
+
+    for i, (rub, brent) in enumerate(zip(profile["RUB"], profile["BRENT"])):
+        ax.annotate(f"{rub:+.2f}", xy=(i, rub), xytext=(0, 9), textcoords="offset points",
+                    ha="center", fontsize=9, color=config.COLOR_RUB)
+        ax.annotate(f"{brent:+.2f}", xy=(i, brent), xytext=(0, -16), textcoords="offset points",
+                    ha="center", fontsize=9, color=config.COLOR_ACCENT)
+    ax.legend(loc="center right")
+    ax.margins(y=0.2)
+    return _save(fig, name)
+
+
+def fig_regimes(pre: pd.DataFrame, post: pd.DataFrame, name="12_regimes.png"):
+    """До и после плавания — две разные валюты."""
+    _setup()
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.6))
+
+    for ax, (profile, title) in zip(
+        axes,
+        [(pre, "Управляемый курс\n2005 — август 2015"), (post, "Свободное плавание\nс августа 2015")],
+    ):
+        ax.plot(range(len(profile)), profile["RUB"], marker="o", lw=2.0,
+                color=config.COLOR_RUB, label="рубль")
+        ax.plot(range(len(profile)), profile["BRENT"], marker="o", lw=2.0,
+                color=config.COLOR_ACCENT, label="нефть Brent")
+        ax.axhline(0, color="black", lw=0.9)
+        ax.set_xticks(range(len(profile)), profile.index, fontsize=8)
+        ax.set_ylim(-0.62, 0.62)
+        ax.set_title(title, fontsize=11)
+
+    axes[0].set_ylabel("корреляция с тенге")
+    axes[0].legend(loc="lower left", fontsize=9)
+    fig.suptitle("Плавающий курс не ослабил связи, а создал их",
+                 fontsize=13, fontweight="bold", y=1.09)
+    fig.tight_layout()
+    return _save(fig, name)
+
+
+def fig_long_jumps(rets: pd.Series, name="13_long_jumps.png"):
+    """Три дня из пяти тысяч решают почти половину."""
+    _setup()
+    series = rets.dropna()
+    worst = series.nlargest(3)
+
+    full = series.cumsum() * 100
+    without = series.drop(worst.index).cumsum() * 100
+
+    fig, ax = plt.subplots(figsize=config.FIG_SIZE_WIDE)
+    ax.plot(full.index, full, color=config.COLOR_KZT, lw=1.6, label="как было")
+    ax.plot(without.index, without, color=config.COLOR_ACCENT, lw=1.6, ls="--",
+            label="без трёх дней девальваций")
+    ax.scatter(worst.index, full.loc[worst.index], color=config.COLOR_RUB, s=40, zorder=5)
+    ax.axhline(0, color="black", lw=0.8)
+
+    # подписи разводим по разные стороны от линии, иначе они ложатся прямо на неё
+    offsets = [(10, -30), (-12, 16), (12, -34)]
+    for (day, value), offset in zip(worst.sort_index().items(), offsets):
+        ax.annotate(
+            f"{day.date()}\n{value * 100:+.0f}%",
+            xy=(mdates.date2num(day), full.loc[day]),
+            xytext=offset,
+            textcoords="offset points",
+            ha="left" if offset[0] > 0 else "right",
+            fontsize=8,
+            color="#3c4043",
+        )
+
+    ax.set_ylabel("накопленное ослабление тенге к доллару, %")
+    ax.set_title(f"Три дня из {len(series)} дают почти половину всего ослабления")
+    ax.legend(loc="upper left")
+    return _save(fig, name)
+
+
+def fig_brent_scatter(monthly: pd.DataFrame, name="14_brent_monthly.png"):
+    """Месячные изменения: нефть вверх — тенге крепче."""
+    _setup()
+    data = monthly[["KZT", "BRENT"]].dropna() * 100
+
+    fig, ax = plt.subplots(figsize=(7.2, 6.0))
+    ax.scatter(data["BRENT"], data["KZT"], s=26, alpha=0.7, color=config.COLOR_KZT)
+
+    slope, intercept = np.polyfit(data["BRENT"], data["KZT"], 1)
+    grid = np.linspace(data["BRENT"].min(), data["BRENT"].max(), 50)
+    corr = data["KZT"].corr(data["BRENT"])
+    ax.plot(grid, slope * grid + intercept, color=config.COLOR_ACCENT, lw=1.8,
+            label=f"наклон {slope:.2f}, r = {corr:+.2f}")
+
+    ax.axhline(0, color="black", lw=0.7)
+    ax.axvline(0, color="black", lw=0.7)
+    ax.set_xlabel("изменение цены Brent за месяц, %")
+    ax.set_ylabel("изменение курса тенге к доллару за месяц, %")
+    ax.set_title("На месячном горизонте нефть видно невооружённым глазом")
+    ax.legend(loc="upper right", fontsize=9)
+    return _save(fig, name)
+
+
+def fig_robustness(oil: pd.DataFrame, rouble: pd.DataFrame, name="15_robustness.png"):
+    """Проверка: устойчива ли связь или держится на нескольких катастрофах."""
+    _setup()
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.8), sharey=True)
+
+    columns = [c for c in oil.columns if c != "наблюдений"]
+    styles = ["-", "--", ":", "-."]
+    markers = ["o", "s", "^", "D"]
+
+    for ax, table, title, color in (
+        (axes[0], oil, "Нефть Brent", config.COLOR_ACCENT),
+        (axes[1], rouble, "Рубль", config.COLOR_RUB),
+    ):
+        for column, style, marker in zip(columns, styles, markers):
+            ax.plot(
+                range(len(table)),
+                table[column].abs(),
+                style,
+                marker=marker,
+                ms=5,
+                lw=1.6,
+                color=color,
+                alpha=1.0 if column == "Пирсон" else 0.55,
+                label=column,
+            )
+        ax.set_xticks(range(len(table)), table.index, fontsize=9)
+        ax.set_title(title, fontsize=11)
+        ax.set_ylim(0, 0.62)
+
+    axes[0].set_ylabel("сила связи с тенге\n(корреляция по модулю)")
+    axes[0].legend(loc="upper left", fontsize=8.5)
+    fig.suptitle(
+        "Связь с рублём выдерживает любую проверку, связь с нефтью — нет",
+        fontsize=13,
+        fontweight="bold",
+        y=1.04,
+    )
+    fig.tight_layout()
     return _save(fig, name)
