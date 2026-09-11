@@ -35,10 +35,19 @@ def test_attach_brent_aligns_on_index():
     assert out["BRENT"].iloc[2] == 28.0
 
 
-def test_regime_splits_on_the_float_date():
-    idx = pd.to_datetime(["2015-08-19", "2015-08-20", "2015-08-21"])
-    labels = features.regime(idx)
-    assert list(labels) == ["управляемый курс", "плавающий курс", "плавающий курс"]
+def test_split_by_regime_keeps_the_transition_day_out_of_both():
+    """День перехода даёт первую строку нового куска, и его доходность теряется."""
+    idx = pd.to_datetime(["2015-08-18", "2015-08-19", "2015-08-20", "2015-08-21"])
+    prices = pd.DataFrame({"KZT": [188.0, 188.4, 255.3, 257.2]}, index=idx)
+    parts = features.split_by_regime(prices)
+
+    assert list(parts) == ["управляемый курс", "плавающий курс"]
+    assert len(parts["управляемый курс"]) == 2
+    assert parts["плавающий курс"].index[0] == pd.Timestamp("2015-08-20")
+
+    float_rets = features.log_returns(parts["плавающий курс"])
+    assert pd.Timestamp("2015-08-20") not in float_rets.index  # +30% никому не достаётся
+    assert len(float_rets) == 1
 
 
 def test_lagged_shifts_forward():

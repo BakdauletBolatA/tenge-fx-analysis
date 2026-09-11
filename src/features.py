@@ -112,19 +112,6 @@ def lagged(df: pd.DataFrame, column: str, lag: int) -> pd.Series:
     return df[column].shift(lag).rename(f"{column}_lag{lag}")
 
 
-def regime(index: pd.DatetimeIndex, float_date=None) -> pd.Series:
-    """Разметить наблюдения на две эпохи курсовой политики.
-
-    20 августа 2015 года Нацбанк отпустил тенге в свободное плавание.
-    До этой даты курс был решением, после — ценой, и мерить их одной
-    линейкой бессмысленно.
-    """
-    float_date = pd.Timestamp(float_date or config.FLOAT_DATE)
-    labels = pd.Series("плавающий курс", index=index)
-    labels[index < float_date] = "управляемый курс"
-    return labels
-
-
 def split_by_regime(prices: pd.DataFrame, float_date=None) -> dict[str, pd.DataFrame]:
     """Разрезать панель цен на две эпохи курсовой политики.
 
