@@ -199,3 +199,86 @@ def weekday_profile(rets: pd.Series) -> pd.DataFrame:
     out = pd.DataFrame({"средн_%": g.mean() * 100, "наблюдений": g.size()})
     out.index = [names[i] for i in out.index]
     return out.round(4)
+
+# --------------------------------------------------------------------------
+# 4. Горизонт и режим: то, ради чего нужен длинный ряд
+# --------------------------------------------------------------------------
+
+HORIZONS = [("D", "дневные"), ("W", "недельные"), ("ME", "месячные"), ("QE", "квартальные")]
+
+
+def horizon_profile(
+    prices: pd.DataFrame,
+    target: str,
+    others: list[str],
+    horizons: list[tuple[str, str]] | None = None,
+) -> pd.DataFrame:
+    """Корреляция target с каждой из others на разных горизонтах.
+
+    Смысл упражнения простой: связь может существовать, но не на том
+    масштабе, на котором её ищут. Нефть влияет на тенге через торговый
+    баланс и бюджет — это медленный канал, и в дневных доходностях его
+    почти не видно.
+    """
+    from src import features
+
+    horizons = horizons or HORIZONS
+    rows = {}
+    for freq, label in horizons:
+        resampled = features.resample_prices(prices[[target] + others], freq)
+        rets = np.log(resampled).diff().dropna()
+        row = {code: rets[target].corr(rets[code]) for code in others}
+        row["наблюдений"] = len(rets)
+        rows[label] = row
+    return pd.DataFrame(rows).T
+
+
+def regime_table(rets: pd.DataFrame, labels: pd.Series, target: str, others: list[str]) -> pd.DataFrame:
+    """Корреляции и волатильность отдельно по эпохам курсовой политики."""
+    rows = {}
+    for name, idx in labels.groupby(labels).groups.items():
+        chunk = rets.loc[rets.index.intersection(idx)]
+        data = chunk[[target] + others].dropna()
+        row = {f"corr {code}": data[target].corr(data[code]) for code in others}
+        series = chunk[target].dropna()
+        row["волатильность_год_%"] = series.std() * np.sqrt(TRADING_DAYS) * 100
+        row["дней_без_движения_%"] = 100 * float((series.abs() < 1e-9).mean())
+        row["наблюдений"] = len(series)
+        rows[name] = row
+    return pd.DataFrame(rows).T
+
+
+def jump_contribution(rets: pd.Series, tops: tuple[int, ...] = (1, 3, 5, 10)) -> pd.DataFrame:
+    """Сколько от всего ослабления валюты дают несколько худших дней."""
+    series = rets.dropna()
+    total = series.sum()
+    rows = []
+    for n in tops:
+        worst = series.nlargest(n)
+        rows.append(
+            {
+                "дней": n,
+                "доля_дней_%": 100 * n / len(series),
+                "вклад_%": 100 * worst.sum(),
+                "доля_ослабления_%": 100 * worst.sum() / total if total else np.nan,
+                "даты": ", ".join(d.date().isoformat() for d in worst.index),
+            }
+        )
+    return pd.DataFrame(rows).set_index("дней")
+
+
+def excluding_jumps_volatility(rets: pd.Series, n: int = 3) -> dict:
+    """Волатильность с разовыми скачками и без них.
+
+    До 2015 года у тенге почти не было волатильности в обычном смысле:
+    курс стоял неделями, а потом разом переставлялся решением регулятора.
+    Среднеквадратичное отклонение в таком режиме описывает не рынок,
+    а два-три дня из тысячи.
+    """
+    series = rets.dropna()
+    worst = series.nlargest(n)
+    return {
+        "волатильность_год_%": float(series.std() * np.sqrt(TRADING_DAYS) * 100),
+        f"без_{n}_скачков_%": float(series.drop(worst.index).std() * np.sqrt(TRADING_DAYS) * 100),
+        "скачки": {d.date().isoformat(): round(float(v) * 100, 1) for d, v in worst.items()},
+    }
