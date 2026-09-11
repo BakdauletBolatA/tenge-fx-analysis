@@ -148,12 +148,86 @@ def load_clean(path=None) -> pd.DataFrame:
     return pd.read_csv(path, parse_dates=["date"], index_col="date")
 
 
+# --------------------------------------------------------------------------
+# Длинный ряд из Excel-выгрузки Нацбанка (2005-2026) плюс нефть
+# --------------------------------------------------------------------------
+
+def tidy_long(raw: pd.DataFrame) -> pd.DataFrame:
+    """То же приведение к типам, но для выгрузки архива.
+
+    Отличие от XML-эндпоинта одно, зато важное: за двадцать лет менялась
+    кратность котировки. Узбекский сум в 2013 году публиковался за одну
+    единицу, а в 2016-м — уже за сто. Кратность лежит в каждой строке
+    отдельно, поэтому делить нужно построчно, а не по словарю валют.
+    """
+    df = raw.copy()
+    df["date"] = pd.to_datetime(df["date"], format="%Y-%m-%d")
+    df["quant"] = pd.to_numeric(df["quant"], errors="coerce")
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+
+    bad = df["value"].isna() | df["quant"].isna() | (df["quant"] <= 0)
+    if bad.any():
+        print(f"  выбрасываю {int(bad.sum())} строк с битыми числами")
+        df = df[~bad]
+
+    df["rate_kzt"] = df["value"] / df["quant"]
+    df = df[~df.duplicated(subset=["date", "code"], keep="last")]
+    return df[["date", "code", "rate_kzt"]].sort_values(["date", "code"])
+
+
+def load_brent(path=None) -> pd.Series:
+    path = path or config.RAW_BRENT_CSV
+    brent = pd.read_csv(path, parse_dates=["date"]).set_index("date")["brent_usd"]
+    print(f"Прочитал нефть: {len(brent)} дней, {brent.index.min().date()} .. {brent.index.max().date()}")
+    return brent
+
+
+def build_long(raw_path=None, out_path=None, min_coverage: float = 0.9) -> pd.DataFrame:
+    """Собрать чистый длинный ряд курсов.
+
+    `min_coverage` отсекает валюты, которые Нацбанк начал котировать уже
+    посреди выборки: грузинский лари, армянский драм и компания появляются
+    только с 2015 года, и в анализе двадцатилетних режимов от них один шум.
+    """
+    raw = pd.read_csv(raw_path or config.RAW_LONG_CSV)
+    print(f"Прочитал {len(raw)} строк длинного ряда")
+
+    long = tidy_long(raw)
+    wide = to_wide(long)
+    print(f"  широкая таблица: {wide.shape[0]} дней x {wide.shape[1]} валют")
+
+    coverage_share = wide.notna().mean()
+    thin = coverage_share[coverage_share < min_coverage]
+    if len(thin):
+        print(f"  убираю валюты с неполной историей: {sorted(thin.index)}")
+        wide = wide.drop(columns=thin.index)
+
+    wide, _ = drop_non_trading_days(wide)
+    report_gaps(wide)
+
+    out_path = out_path or config.CLEAN_LONG_CSV
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    wide.to_csv(out_path, float_format="%.6f")
+    print(f"Сохранил {out_path.name}: {wide.shape[0]} торговых дней, {wide.shape[1]} валют, "
+          f"{wide.index.min().date()} .. {wide.index.max().date()}")
+    return wide
+
+
+def load_clean_long(path=None) -> pd.DataFrame:
+    path = path or config.CLEAN_LONG_CSV
+    return pd.read_csv(path, parse_dates=["date"], index_col="date")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Очистить сырые курсы Нацбанка")
     parser.add_argument("--raw", default=None)
     parser.add_argument("--out", default=None)
+    parser.add_argument("--long", action="store_true", help="чистить длинный ряд из архива")
     args = parser.parse_args()
-    build(args.raw, args.out)
+    if args.long:
+        build_long(args.raw, args.out)
+    else:
+        build(args.raw, args.out)
 
 
 if __name__ == "__main__":

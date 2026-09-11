@@ -93,6 +93,45 @@ def add_calendar(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def attach_brent(prices: pd.DataFrame, brent: pd.Series, name: str = "BRENT") -> pd.DataFrame:
+    """Добавить нефть в панель, выровняв её по торговым дням курсов.
+
+    Нефть намеренно кладётся как есть, без сдвигов: правильное выравнивание
+    во времени — это результат, а не предпосылка, и его считает
+    analysis.lead_lag_profile().
+    """
+    out = prices.copy()
+    out[name] = brent.reindex(out.index)
+    filled = out[name].notna().mean()
+    print(f"  нефть покрывает {filled:.1%} торговых дней")
+    return out
+
+
+def lagged(df: pd.DataFrame, column: str, lag: int) -> pd.Series:
+    """Сдвинутая копия колонки: lag=1 означает «значение предыдущего дня»."""
+    return df[column].shift(lag).rename(f"{column}_lag{lag}")
+
+
+def regime(index: pd.DatetimeIndex, float_date=None) -> pd.Series:
+    """Разметить наблюдения на две эпохи курсовой политики.
+
+    20 августа 2015 года Нацбанк отпустил тенге в свободное плавание.
+    До этой даты курс был решением, после — ценой, и мерить их одной
+    линейкой бессмысленно.
+    """
+    float_date = pd.Timestamp(float_date or config.FLOAT_DATE)
+    labels = pd.Series("плавающий курс", index=index)
+    labels[index < float_date] = "управляемый курс"
+    return labels
+
+
+def resample_prices(prices: pd.DataFrame, freq: str) -> pd.DataFrame:
+    """Последнее значение в периоде — так считается доходность за неделю/месяц."""
+    if freq == "D":
+        return prices
+    return prices.resample(freq).last().dropna(how="all")
+
+
 def rolling_corr(rets: pd.DataFrame, a: str, b: str, window: int = 90) -> pd.Series:
     """Скользящая корреляция двух валют."""
     return rets[a].rolling(window, min_periods=window // 2).corr(rets[b])
